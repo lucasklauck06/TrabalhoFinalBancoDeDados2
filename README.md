@@ -68,3 +68,19 @@ Uso: Útil para logs e verificação de versão.
 Fecha o driver e libera os recursos usados.
 
 driver.close()
+## REferenciar texto gerado por uma IA 
+Para referenciar texto gerado por uma IA em documentação de projeto, é importante deixar claro que o conteúdo foi produzido por um modelo de inteligência artificial, citar a ferramenta usada, a data de geração e, se possível, o contexto ou prompt que gerou o texto. Isso garante transparência e rastreabilidade, evitando confusões sobre autoria.
+
+Um exemplo de como fazer a referência no estilo de documentação técnica seria:
+
+Exemplo de referência em documentação:
+
+Texto gerado com auxílio da IA ChatGPT (modelo GPT-5 mini) da OpenAI, em 11 de novembro de 2025, utilizando o prompt: “Explique como referenciar texto gerado por IA em documentação de projeto”.
+
+Formato de citação sugerido no documento:
+
+Documento: Documentação do Projeto X
+
+Seção: Introdução / Notas técnicas
+
+Citação: “O uso de IA pode auxiliar na criação de textos explicativos, mas a autoria deve ser atribuída ao modelo utilizado para garantir transparência” (ChatGPT, OpenAI, 2025).
