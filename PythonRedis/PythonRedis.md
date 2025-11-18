@@ -2,6 +2,8 @@
 
 ## Site Docker
 https://www.docker.com/products/docker-desktop/
+wsl --update 
+wsl --version
 
 ## instalar Redis
 docker run -d -p 6379:6379 redis
@@ -10,4 +12,11 @@ docker run -d -p 6379:6379 redis
 pip install redis
 
 ## rodar crud
-python crudRedis.py
+cd PythonRedis
+python CrudRedis.py
+
+## stop no docker
+docker stop 7d37505836b05a2267ed19c0a84e0220844b3beaa2d5f291a509fd0ceef76b50
+
+## start no docker
+docker start 7d37505836b05a2267ed19c0a84e0220844b3beaa2d5f291a509fd0ceef76b50
