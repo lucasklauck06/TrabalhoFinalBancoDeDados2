@@ -2,12 +2,29 @@ import psycopg2
 from psycopg2 import Error
 
 # --- CONFIGURAÇÃO DA CONEXÃO ---
-# Altere estes dados conforme o seu banco PostgreSQL local
 DB_HOST = "localhost"
-DB_NAME = "TrabalhoFinalBancoII" # Ex: trabalho_integracao
+DB_NAME = "TrabalhoFinalBancoII" 
 DB_USER = "postgres"
 DB_PASS = "postgres"
 DB_PORT = "5432"
+
+# --- FUNÇÃO QUE FALTAVA (O ERRO ESTAVA AQUI) ---
+def testar_conexao():
+    """Tenta conectar e desconectar apenas para verificar se o banco está ON."""
+    try:
+        conn = psycopg2.connect(
+            host=DB_HOST,
+            database=DB_NAME,
+            user=DB_USER,
+            password=DB_PASS,
+            port=DB_PORT,
+            connect_timeout=3
+        )
+        conn.close()
+        return True
+    except Error:
+        return False
+# ------------------------------------------------
 
 def conectar():
     """Estabelece a conexão com o banco de dados."""

@@ -1,9 +1,8 @@
 from neo4j import GraphDatabase
 
 # CONFIGURAÇÃO DO NEO4J
-# Certifique-se de que seu banco Neo4j está rodando
 URI = "bolt://localhost:7687"
-AUTH = ("neo4j", "unochapeco") # Altere para sua senha
+AUTH = ("neo4j", "unochapeco") 
 
 class GrafoDB:
     def __init__(self, uri, auth):
@@ -12,12 +11,18 @@ class GrafoDB:
     def close(self):
         self.driver.close()
 
+    # --- MÉTODO QUE FALTAVA (ADICIONADO) ---
+    def verificar_conexao(self):
+        """Verifica se o servidor Neo4j está acessível."""
+        try:
+            self.driver.verify_connectivity()
+            return True
+        except Exception:
+            return False
+    # ---------------------------------------
+
     # --- CRIAÇÃO DE NÓS (PESSOAS) ---
     def criar_pessoa(self, id_sql, cpf, nome):
-        """
-        Cria um nó Pessoa com id, cpf e nome conforme especificado.
-        Usa MERGE para evitar duplicatas baseadas no CPF.
-        """
         with self.driver.session() as session:
             query = """
             MERGE (p:Pessoa {cpf: $cpf})
@@ -29,11 +34,7 @@ class GrafoDB:
 
     # --- CRIAÇÃO DE RELACIONAMENTOS (AMIZADE) ---
     def adicionar_amizade(self, cpf_cliente, cpf_amigo):
-        """
-        Cria uma relação [:AMIGO_DE] entre dois nós existentes.
-        """
         with self.driver.session() as session:
-            # Verifica se ambos existem antes de criar a relação
             query = """
             MATCH (p1:Pessoa {cpf: $cpf1})
             MATCH (p2:Pessoa {cpf: $cpf2})
@@ -41,9 +42,6 @@ class GrafoDB:
             MERGE (p2)-[:AMIGO_DE]->(p1)  
             RETURN p1.nome, p2.nome
             """
-            # Nota: A linha 'MERGE (p2)-[:AMIGO_DE]->(p1)' torna a amizade bidirecional.
-            # Remova se a amizade for apenas num sentido (indicação única).
-            
             result = session.run(query, cpf1=cpf_cliente, cpf2=cpf_amigo)
             if result.peek():
                 print(f"✅ Amizade criada entre {cpf_cliente} e {cpf_amigo}")
@@ -68,9 +66,7 @@ class GrafoDB:
 
 # --- MENU DE TESTE ---
 def menu_grafo():
-    # Inicializa conexão
     db = GrafoDB(URI, AUTH)
-
     while True:
         print("\n=== BASE 3: NEO4J (GRAFOS) ===")
         print("1. Adicionar Pessoa (Nó)")
@@ -80,22 +76,18 @@ def menu_grafo():
         print("0. Sair")
         
         opcao = input("Opção: ")
-
         if opcao == '1':
             print("\n--- Adicionar Pessoa ---")
-            # O ID aqui seria idealmente o mesmo gerado no PostgreSQL para manter consistência
             id_sql = int(input("ID (do Relacional/Sistema): ")) 
             cpf = input("CPF: ")
             nome = input("Nome: ")
             db.criar_pessoa(id_sql, cpf, nome)
             print("✅ Pessoa adicionada ao grafo.")
-
         elif opcao == '2':
             print("\n--- Criar Amizade ---")
             cpf1 = input("CPF do Cliente: ")
             cpf2 = input("CPF do Amigo: ")
             db.adicionar_amizade(cpf1, cpf2)
-
         elif opcao == '3':
             cpf = input("\nVer amigos do CPF: ")
             amigos = db.listar_amigos_de(cpf)
@@ -105,13 +97,11 @@ def menu_grafo():
                     print(f"- {amigo['amigo.nome']} (CPF: {amigo['amigo.cpf']})")
             else:
                 print("Nenhum amigo encontrado ou CPF inexistente.")
-
         elif opcao == '4':
             print("\n--- Pessoas no Grafo ---")
             pessoas = db.listar_todos()
             for p in pessoas:
                 print(f"ID: {p['p.id']} | Nome: {p['p.nome']} | CPF: {p['p.cpf']}")
-
         elif opcao == '0':
             db.close()
             break
@@ -123,4 +113,3 @@ if __name__ == "__main__":
         menu_grafo()
     except Exception as e:
         print(f"Erro de conexão: {e}")
-        print("Verifique se o Neo4j está rodando e se a senha está correta.")

@@ -94,5 +94,43 @@ def menu_principal():
         else:
             print("Inválido.")
 
+# No arquivo main.py
+
+def verificar_dependencias():
+    print("🔄 Verificando conexão com os bancos de dados...")
+    
+    # 1. Testar PostgreSQL
+    pg_ok = db_postgres.testar_conexao()
+    if pg_ok:
+        print("✅ PostgreSQL: Conectado!")
+    else:
+        print("❌ PostgreSQL: FALHA DE CONEXÃO.")
+        print(f"   -> Verifique se o serviço está rodando e se as credenciais em 'db_postgres.py' estão certas.")
+
+    # 2. Testar Neo4j
+    neo_ok = False
+    try:
+        # Criamos uma instância temporária só para testar
+        temp_grafo = db_neo4j.GrafoDB(URI_NEO4J, AUTH_NEO4J)
+        if temp_grafo.verificar_conexao():
+            print("✅ Neo4j: Conectado!")
+            neo_ok = True
+        else:
+            print("❌ Neo4j: FALHA DE CONEXÃO (Serviço indisponível).")
+        temp_grafo.close()
+    except Exception as e:
+        print(f"❌ Neo4j: Erro ao tentar conectar ({e}).")
+
+    return pg_ok, neo_ok
+
 if __name__ == "__main__":
-    menu_principal()
+    # Só abre o menu se AMBOS estiverem ligados. 
+    # Se quiser permitir que um funcione sem o outro, mude a lógica do 'if'.
+    pg_online, neo_online = verificar_dependencias()
+
+    if pg_online and neo_online:
+        menu_principal()
+    else:
+        print("\n⚠️  ATENÇÃO: Não foi possível conectar a todos os bancos.")
+        print("    Por favor, inicie os serviços (Postgres/Neo4j) e tente novamente.")
+        # Opcional: input("Pressione Enter para sair...")
