@@ -1,5 +1,4 @@
 import psycopg2
-import redis
 
 # Funções para PostgreSQL
 
@@ -54,38 +53,6 @@ def delete_postgres_user(user_id):
         cursor.close()
         conn.close()
 
-# Funções para Redis
-
-def connect_redis():
-    try:
-        client = redis.StrictRedis(host='localhost', port=6379, db=0)
-        return client
-    except Exception as e:
-        print(f"Erro ao conectar com Redis: {e}")
-        return None
-
-def create_redis_user(user_id, name, email):
-    client = connect_redis()
-    if client:
-        client.hset(f"user:{user_id}", "name", name)
-        client.hset(f"user:{user_id}", "email", email)
-
-def read_redis_user(user_id):
-    client = connect_redis()
-    if client:
-        user = client.hgetall(f"user:{user_id}")
-        return user
-
-def update_redis_user(user_id, name, email):
-    client = connect_redis()
-    if client:
-        client.hset(f"user:{user_id}", "name", name)
-        client.hset(f"user:{user_id}", "email", email)
-
-def delete_redis_user(user_id):
-    client = connect_redis()
-    if client:
-        client.delete(f"user:{user_id}")
 
 # Exemplo de uso
 
@@ -97,10 +64,4 @@ print("Usuário PostgreSQL:", user)
 update_postgres_user(1, "João Silva", "joao.silva@example.com")
 delete_postgres_user(1)
 
-# Operações com Redis
-print("\nRedis CRUD:")
-create_redis_user(1, "Maria", "maria@example.com")
-user_redis = read_redis_user(1)
-print("Usuário Redis:", user_redis)
-update_redis_user(1, "Maria Oliveira", "maria.oliveira@example.com")
-delete_redis_user(1)
+
