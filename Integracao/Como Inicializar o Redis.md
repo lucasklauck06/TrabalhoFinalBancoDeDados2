@@ -14,8 +14,8 @@ docker run -d -p 6379:6379 redis
 pip install redis
 
 ## rodar crud (NAO VAI USAR PQ VAI SER TUDO NO MAIN)
-cd PythonRedis
-python CrudRedis.py
+cd Integracao
+python db_redis.py
 
 ## stop no docker
 docker stop 5d8b878b7e1fbed4ea7bcd633f94c91de6987c639494cbd79e75d2fdb19b9e79
