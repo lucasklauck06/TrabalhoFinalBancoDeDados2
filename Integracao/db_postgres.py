@@ -61,8 +61,10 @@ def criar_cliente(conn):
         id_gerado = cursor.fetchone()[0]
         conn.commit()
         print(f"✅ Cliente cadastrado com sucesso! ID: {id_gerado}")
+        return id_gerado  # <--- ADICIONADO: Retorna o ID para o main.py usar
     except Error as e:
         print(f"❌ Erro ao inserir: {e}")
+        return None
 
 def listar_clientes(conn):
     print("\n--- Lista de Clientes ---")
@@ -121,8 +123,13 @@ def deletar_cliente(conn):
 def criar_produto(conn):
     print("\n--- Novo Produto ---")
     produto = input("Nome do Produto: ")
-    valor = float(input("Valor (ex: 10.50): "))
-    quantidade = int(input("Quantidade em estoque: "))
+    try:
+        valor = float(input("Valor (ex: 10.50): "))
+        quantidade = int(input("Quantidade em estoque: "))
+    except ValueError:
+        print("Erro: Valor ou Quantidade devem ser números.")
+        return None
+        
     tipo = input("Tipo/Categoria: ")
 
     try:
@@ -130,10 +137,13 @@ def criar_produto(conn):
         sql = """INSERT INTO Produtos (produto, valor, quantidade, tipo) 
                  VALUES (%s, %s, %s, %s) RETURNING id;"""
         cursor.execute(sql, (produto, valor, quantidade, tipo))
+        id_gerado = cursor.fetchone()[0]
         conn.commit()
         print("✅ Produto cadastrado com sucesso!")
+        return id_gerado # <--- ADICIONADO: Retorna o ID
     except Error as e:
         print(f"❌ Erro ao inserir produto: {e}")
+        return None
 
 def listar_produtos(conn):
     print("\n--- Estoque de Produtos ---")
@@ -189,6 +199,56 @@ def listar_compras(conn):
             print(f"{row[0]:<5} {row[1]:<20} {row[2]:<20} {row[3]}")
     except Error as e:
         print(f"❌ Erro: {e}")
+
+
+# para ajudar na integração do Redis
+def buscar_compras_por_cliente(conn, id_cliente):
+    """Retorna lista de produtos comprados por um ID específico (Para integração)."""
+    try:
+        cursor = conn.cursor()
+        sql = """
+        SELECT p.produto, p.tipo 
+        FROM Compras c
+        JOIN Produtos p ON c.id_produto = p.id
+        WHERE c.id_cliente = %s
+        """
+        cursor.execute(sql, (id_cliente,))
+        # Retorna lista de dicionários simples
+        return [{"produto": row[0], "tipo": row[1]} for row in cursor.fetchall()]
+    except Error:
+        return []
+    
+
+def decrementar_estoque(conn, id_produto):
+    """
+    Verifica se há estoque e decrementa 1 unidade.
+    Retorna True se conseguiu, False se não há estoque.
+    """
+    try:
+        cursor = conn.cursor()
+        
+        # 1. Verifica a quantidade atual
+        cursor.execute("SELECT quantidade FROM Produtos WHERE id = %s", (id_produto,))
+        resultado = cursor.fetchone()
+        
+        if not resultado:
+            return False # Produto não existe
+            
+        qtd_atual = resultado[0]
+        
+        if qtd_atual > 0:
+            # 2. Atualiza o banco (Decrementa)
+            sql_update = "UPDATE Produtos SET quantidade = quantidade - 1 WHERE id = %s"
+            cursor.execute(sql_update, (id_produto,))
+            # Nota: O commit será feito no main.py junto com a compra para garantir integridade
+            return True
+        else:
+            print("⚠️ ERRO: Produto esgotado (Estoque zerado)!")
+            return False
+            
+    except Error as e:
+        print(f"❌ Erro ao atualizar estoque: {e}")
+        return False
 
 # ==========================================
 # MENU PRINCIPAL

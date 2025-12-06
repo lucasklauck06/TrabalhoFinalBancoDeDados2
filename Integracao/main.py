@@ -1,136 +1,303 @@
 import sys
-# Importando os módulos que criamos (os arquivos devem estar na mesma pasta)
+import json
+# Importando os 4 módulos
 import db_postgres
 import db_neo4j
+import db_mongo
+import db_redis
 
-# Configuração do Neo4j (Igual ao arquivo anterior)
+# Configuração Neo4j
 URI_NEO4J = "bolt://localhost:7687"
 AUTH_NEO4J = ("neo4j", "unochapeco") 
 
-def fluxo_compra_integrada():
-    print("\n=== NOVA COMPRA COM INDICAÇÃO (INTEGRAÇÃO) ===")
+# ==============================================================================
+# LÓGICA DE INTEGRAÇÃO / CONSOLIDAÇÃO DE DADOS
+# ==============================================================================
+def gerar_recomendacoes_redis():
+    """
+    Simula a API: Consolida dados das Bases 1, 2 e 3 e grava na Base 4 (Redis).
+    """
+    print("\n=== GERADOR DE RECOMENDAÇÕES (CONSOLIDAÇÃO) ===")
     
-    # 1. Conectar ao PostgreSQL
-    conn_pg = db_postgres.conectar()
-    if not conn_pg:
+    # --- MUDANÇA AQUI: LISTAR CLIENTES ANTES DE PEDIR CPF ---
+    print("\n--- Clientes Disponíveis (PostgreSQL) ---")
+    conn_listagem = db_postgres.conectar()
+    if conn_listagem:
+        db_postgres.listar_clientes(conn_listagem)
+        conn_listagem.close()
+    else:
+        print("(Não foi possível conectar ao Postgres para listar clientes)")
+    # --------------------------------------------------------
+
+    cpf_alvo = input("Digite o CPF do usuário para gerar recomendações: ")
+    
+    # 1. Buscamos quem são os amigos desse usuário no Neo4j (Base 3)
+    grafo = db_neo4j.GrafoDB(URI_NEO4J, AUTH_NEO4J)
+    amigos_conectados = grafo.listar_amigos_de(cpf_alvo) # Retorna lista de dicts
+    grafo.close()
+    
+    if not amigos_conectados:
+        print("⚠️ Este usuário não tem amigos conectados no Grafo.")
+        print("Dica: Faça uma compra na Opção 5 e indique um amigo primeiro.")
         return
 
+    print(f"-> Encontrados {len(amigos_conectados)} amigos conectados.")
+    
+    # 2. Conectamos no Postgres para ver o que esses amigos compraram (Base 1)
+    conn_pg = db_postgres.conectar()
+    if not conn_pg: return
+
+    lista_recomendacoes_produtos = []
+    
+    cursor = conn_pg.cursor()
+    for amigo in amigos_conectados:
+        cpf_amigo = amigo['amigo.cpf']
+        nome_amigo = amigo['amigo.nome']
+        
+        # Descobre o ID desse amigo no Postgres pelo CPF
+        cursor.execute("SELECT id FROM Clientes WHERE cpf = %s", (cpf_amigo,))
+        res = cursor.fetchone()
+        
+        if res:
+            id_pg_amigo = res[0]
+            # Busca compras deste amigo (Usando a função nova que pedimos para adicionar)
+            # Nota: Certifique-se que adicionou 'buscar_compras_por_cliente' no db_postgres.py
+            if hasattr(db_postgres, 'buscar_compras_por_cliente'):
+                compras = db_postgres.buscar_compras_por_cliente(conn_pg, id_pg_amigo)
+                
+                for c in compras:
+                    lista_recomendacoes_produtos.append({
+                        "indicado_por": nome_amigo,
+                        "produto": c['produto'],
+                        "categoria": c['tipo']
+                    })
+            else:
+                print("❌ Erro: Função 'buscar_compras_por_cliente' não encontrada no db_postgres.py")
+    
+    conn_pg.close()
+
+    # 3. Buscamos os interesses pessoais no MongoDB (Base 2)
+    conn_pg = db_postgres.conectar()
+    cursor = conn_pg.cursor()
+    cursor.execute("SELECT id, nome FROM Clientes WHERE cpf = %s", (cpf_alvo,))
+    usuario_pg = cursor.fetchone()
+    conn_pg.close()
+
+    interesses_pessoais = []
+    nome_usuario = "Usuário sem compras"
+    origem_captacao = None
+    
+    if usuario_pg:
+        id_usuario, nome_usuario = usuario_pg
+        dados_mongo = db_mongo.listar_interesses_cliente(id_usuario)
+        if dados_mongo:
+            interesses_pessoais = dados_mongo.get('interesses', [])
+            origem_captacao = dados_mongo.get('origem_captacao', None)
+
+    # 4. CONSOLIDAÇÃO FINAL (JSON)
+    dados_consolidados = {
+        "usuario": {
+            "cpf": cpf_alvo,
+            "nome": nome_usuario,
+            "origem": origem_captacao
+        },
+        "interesses_pessoais": interesses_pessoais,
+        "recomendacoes_baseadas_em_amigos": lista_recomendacoes_produtos
+    }
+
+    # 5. Salva no Redis (Base 4)
+    db_redis.salvar_recomendacao(cpf_alvo, dados_consolidados)
+    
+    print("\n--- JSON GERADO (Salvo no Redis) ---")
+    print(json.dumps(dados_consolidados, indent=4, ensure_ascii=False))
+
+
+# ==============================================================================
+# FLUXO DE COMPRA 
+# ==============================================================================
+# Substitua APENAS a função fluxo_compra_integrada no main.py
+
+def fluxo_compra_integrada():
+    print("\n=== NOVA COMPRA COM INDICAÇÃO (AUTO-CADASTRO) ===")
+    conn_pg = db_postgres.conectar()
+    if not conn_pg: return
+
     try:
-        # --- ETAPA 1: REALIZAR A COMPRA (RELACIONAL) ---
-        # Listamos clientes para o usuário escolher quem está comprando
-        db_postgres.listar_clientes(conn_pg)
-        id_cliente = input("Digite o ID do Cliente que está comprando: ")
-        
-        # Precisamos pegar o CPF e Nome desse cliente para usar no Neo4j depois
         cursor = conn_pg.cursor()
+
+        # [PASSO 1] Identificação do Cliente
+        print("\n--- [1] Identificação do Cliente ---")
+        db_postgres.listar_clientes(conn_pg)
+        entrada_cliente = input("Digite o ID do Cliente (ou 'N' para cadastrar novo): ")
+
+        id_cliente = None
+        
+        if entrada_cliente.upper() == 'N':
+            id_cliente = db_postgres.criar_cliente(conn_pg)
+            if not id_cliente: return
+        else:
+            id_cliente = entrada_cliente
+            cursor.execute("SELECT id FROM Clientes WHERE id = %s", (id_cliente,))
+            if not cursor.fetchone():
+                print(f"⚠️ Cliente {id_cliente} não encontrado.")
+                if input("Cadastrar agora? (S/N): ").upper() == 'S':
+                     id_cliente = db_postgres.criar_cliente(conn_pg)
+                     if not id_cliente: return
+                else: return
+
+        # Pega nome atualizado
         cursor.execute("SELECT cpf, nome FROM Clientes WHERE id = %s", (id_cliente,))
-        dados_cliente = cursor.fetchone()
-        
-        if not dados_cliente:
-            print("Cliente não encontrado.")
-            return
-            
-        cpf_cliente, nome_cliente = dados_cliente
+        cpf_cliente, nome_cliente = cursor.fetchone()
+        print(f"✅ Cliente: {nome_cliente}")
 
-        # Listamos produtos e efetuamos a compra
+        # [PASSO 2] Seleção do Produto
+        print("\n--- [2] Seleção do Produto ---")
         db_postgres.listar_produtos(conn_pg)
-        id_produto = input("Digite o ID do Produto: ")
+        entrada_prod = input("Digite o ID do Produto (ou 'N' para novo): ")
         
-        # Função do db_postgres para registrar no banco relacional [cite: 10]
-        # (Estou chamando direto o INSERT aqui para simplificar a integração)
-        cursor.execute("INSERT INTO Compras (id_cliente, id_produto) VALUES (%s, %s)", (id_cliente, id_produto))
-        conn_pg.commit()
-        print("✅ Sucesso: Compra registrada no PostgreSQL (Base 1).")
+        id_produto = None
+        if entrada_prod.upper() == 'N':
+            id_produto = db_postgres.criar_produto(conn_pg)
+        else:
+            id_produto = entrada_prod
+            cursor.execute("SELECT id FROM Produtos WHERE id = %s", (id_produto,))
+            if not cursor.fetchone():
+                 if input("Produto não existe. Cadastrar? (S/N): ").upper() == 'S':
+                     id_produto = db_postgres.criar_produto(conn_pg)
+                 else: return
 
-        # --- ETAPA 2: INDICAR UM AMIGO (GRAFOS) ---
-        print("\n--- INDICAÇÃO DE AMIGO ---")
-        print("Conforme regra do sistema, indique um amigo para ganhar pontos.")
-        
-        # Conectar ao Neo4j
-        grafo = db_neo4j.GrafoDB(URI_NEO4J, AUTH_NEO4J)
-        
-        cpf_amigo = input("CPF do Amigo indicado: ")
-        nome_amigo = input("Nome do Amigo: ")
+        if not id_produto: return
 
-        # 1. Garante que o CLIENTE (quem comprou) existe no grafo
-        grafo.criar_pessoa(id_sql=id_cliente, cpf=cpf_cliente, nome=nome_cliente)
+        # =========================================================
+        # [PASSO 3] GRAVAÇÃO NO POSTGRES (AGORA COM ESTOQUE)
+        # =========================================================
         
-        # 2. Cria o nó do AMIGO no grafo (Base 3) [cite: 16]
-        # Nota: O amigo ainda não tem ID do Postgres pois não é cliente, passamos 0 ou None
-        grafo.criar_pessoa(id_sql=0, cpf=cpf_amigo, nome=nome_amigo)
+        # 1. Tenta baixar o estoque primeiro
+        if db_postgres.decrementar_estoque(conn_pg, id_produto):
+            
+            # 2. Se deu certo, registra a compra
+            cursor.execute("INSERT INTO Compras (id_cliente, id_produto) VALUES (%s, %s)", (id_cliente, id_produto))
+            conn_pg.commit() # Salva TANTO o update de estoque QUANTO o insert da compra
+            print(f"✅ Estoque atualizado e Compra registrada no Postgres.")
+            
+        else:
+            print("🚫 Venda Cancelada: Não foi possível atualizar o estoque.")
+            return # Sai da função, não faz o resto
+
+        # =========================================================
+
+        # [PASSO 4] INDICAÇÃO / ORIGEM
+        print("\n--- [3] Indicação / Origem ---")
+        entrada_indicacao = input("CPF do Amigo (ou 'N' para nenhum / 'O' para outra origem): ")
         
-        # 3. Cria a relação de amizade
-        grafo.adicionar_amizade(cpf_cliente, cpf_amigo)
+        origem_captacao = None 
+
+        if entrada_indicacao.strip().upper() == 'N':
+            print("ℹ️ Nenhuma indicação registrada.")
         
-        print("✅ Sucesso: Amizade registrada no Neo4j (Base 3).")
-        grafo.close()
+        elif entrada_indicacao.strip().upper() == 'O':
+            origem_captacao = input("Onde o cliente viu a loja? (Anuncio, Folder, Fachada...): ")
+            print(f"📝 Origem '{origem_captacao}' registrada.")
+            
+        else:
+            cpf_amigo = entrada_indicacao
+            nome_amigo = input("Nome do Amigo: ")
+            
+            try:
+                grafo = db_neo4j.GrafoDB(URI_NEO4J, AUTH_NEO4J)
+                grafo.criar_pessoa(id_cliente, cpf_cliente, nome_cliente)
+                grafo.criar_pessoa(0, cpf_amigo, nome_amigo)
+                grafo.adicionar_amizade(cpf_cliente, cpf_amigo)
+                grafo.close()
+                print("✅ Vínculo de amizade criado no Neo4j.")
+            except Exception as e:
+                print(f"⚠️ Erro ao conectar no Neo4j: {e}")
+
+        # [PASSO 5] MONGODB
+        print("\n--- [4] Interesses (MongoDB) ---")
+        entrada_interesses = input(f"Quais os interesses de {nome_cliente}? (ex: Tech, Viagem) ou 'N' para pular: ")
+        
+        lista_interesses = []
+        if entrada_interesses.strip().upper() == 'N':
+            print("ℹ️ Cadastro de interesses pulado.")
+        elif entrada_interesses.strip():
+            lista_interesses = [x.strip() for x in entrada_interesses.split(',')]
+            
+        if lista_interesses or origem_captacao:
+            db_mongo.adicionar_interesses(id_cliente, nome_cliente, lista_interesses, origem=origem_captacao)
+        else:
+            print("Nenhum dado extra para salvar no Mongo.")
+
+        # [FINAL]
+        db_redis.limpar_cache()
+        print("\n✨ FLUXO FINALIZADO! ✨")
 
     except Exception as e:
-        print(f"❌ Erro na integração: {e}")
+        print(f"❌ Erro inesperado: {e}")
+        conn_pg.rollback() # Desfaz alterações se der erro no meio
     finally:
-        if conn_pg:
-            conn_pg.close()
+        if conn_pg: conn_pg.close()
 
-def menu_principal():
+# ==============================================================================
+# MENU E VERIFICAÇÕES
+# ==============================================================================
+def verificar_tudo():
+    print("🔄 Verificando serviços...")
+    pg = db_postgres.testar_conexao()
+    print(f"{'✅' if pg else '❌'} Postgres")
+    
+    neo = False
+    try:
+        g = db_neo4j.GrafoDB(URI_NEO4J, AUTH_NEO4J)
+        if g.verificar_conexao(): neo = True
+        g.close()
+    except: pass
+    print(f"{'✅' if neo else '❌'} Neo4j")
+    
+    mongo = db_mongo.testar_conexao_mongo()
+    print(f"{'✅' if mongo else '❌'} Mongo")
+    
+    red = db_redis.testar_conexao_redis()
+    print(f"{'✅' if red else '❌'} Redis")
+    
+    return pg and neo and mongo and red
+
+def menu():
     while True:
-        print("\n=== SISTEMA INTEGRADOR DE VENDAS ===")
-        print("1. Gerenciar PostgreSQL (Clientes/Produtos)")
-        print("2. Gerenciar Neo4j (Visualizar Grafo)")
-        print("3. REALIZAR COMPRA COMPLETA (Integração)")
+        print("\n=== SISTEMA 4 BASES (INTEGRAÇÃO TOTAL) ===")
+        print("1. Postgres (Admin)")
+        print("2. Neo4j (Visualizar)")
+        print("3. Mongo (Interesses)")
+        print("4. Redis (Cache/Consulta)")
+        print("-" * 30)
+        print("5. REALIZAR COMPRA (Grava nas Bases 1, 2, 3)")
+        print("6. GERAR RECOMENDAÇÕES (Lê 1, 2, 3 -> Grava na 4)")
         print("0. Sair")
         
-        opcao = input("Opção: ")
-        
-        if opcao == '1':
-            # Chama o menu do arquivo db_postgres.py
-            db_postgres.menu() 
-        elif opcao == '2':
-            # Chama o menu do arquivo db_neo4j.py
-            db_neo4j.menu_grafo()
-        elif opcao == '3':
-            fluxo_compra_integrada()
-        elif opcao == '0':
-            sys.exit()
-        else:
-            print("Inválido.")
-
-# No arquivo main.py
-
-def verificar_dependencias():
-    print("🔄 Verificando conexão com os bancos de dados...")
-    
-    # 1. Testar PostgreSQL
-    pg_ok = db_postgres.testar_conexao()
-    if pg_ok:
-        print("✅ PostgreSQL: Conectado!")
-    else:
-        print("❌ PostgreSQL: FALHA DE CONEXÃO.")
-        print(f"   -> Verifique se o serviço está rodando e se as credenciais em 'db_postgres.py' estão certas.")
-
-    # 2. Testar Neo4j
-    neo_ok = False
-    try:
-        # Criamos uma instância temporária só para testar
-        temp_grafo = db_neo4j.GrafoDB(URI_NEO4J, AUTH_NEO4J)
-        if temp_grafo.verificar_conexao():
-            print("✅ Neo4j: Conectado!")
-            neo_ok = True
-        else:
-            print("❌ Neo4j: FALHA DE CONEXÃO (Serviço indisponível).")
-        temp_grafo.close()
-    except Exception as e:
-        print(f"❌ Neo4j: Erro ao tentar conectar ({e}).")
-
-    return pg_ok, neo_ok
+        op = input("Opção: ")
+        if op == '1': db_postgres.menu()
+        elif op == '2': db_neo4j.menu_grafo()
+        elif op == '3': db_mongo.menu_mongo()
+        elif op == '4': db_redis.menu_redis()
+        elif op == '5': fluxo_compra_integrada()
+        elif op == '6': gerar_recomendacoes_redis()
+        elif op == '0': sys.exit()
+        else: print("Inválido.")
 
 if __name__ == "__main__":
-    # Só abre o menu se AMBOS estiverem ligados. 
-    # Se quiser permitir que um funcione sem o outro, mude a lógica do 'if'.
-    pg_online, neo_online = verificar_dependencias()
+    # A função verificar_tudo retorna True se TODOS estiverem on, 
+    # e False se ALGUM estiver off.
+    sistema_online = verificar_tudo()
 
-    if pg_online and neo_online:
-        menu_principal()
+    if sistema_online:
+        # Se tudo estiver ✅, abre o menu normal
+        menu()
     else:
-        print("\n⚠️  ATENÇÃO: Não foi possível conectar a todos os bancos.")
-        print("    Por favor, inicie os serviços (Postgres/Neo4j) e tente novamente.")
-        # Opcional: input("Pressione Enter para sair...")
+        # Se algum estiver ❌, cai aqui e BLOQUEIA
+        print("\n⛔ ERRO CRÍTICO: O sistema não pode ser iniciado.")
+        print("   Motivo: Não foi possível estabelecer conexão com TODOS os 4 bancos.")
+        print("   A integração exige que PostgreSQL, Neo4j, MongoDB e Redis estejam rodando.")
+        
+        # Pausa para o usuário ler antes de fechar
+        input("\n   Pressione ENTER para encerrar o programa...")
+        sys.exit() # Encerra o script
